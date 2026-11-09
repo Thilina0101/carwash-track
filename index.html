@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="google" content="notranslate">
+<title>สถานะรถของคุณ · Your car</title>
+<style>
+  :root { --bg: #f1f5f9; --card: #fff; --ink: #0f172a; --muted: #64748b; --brand: #0369a1; --ok: #16a34a; --wait: #d97706; --line: #e2e8f0; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.45 "Sarabun", "Noto Sans Thai", system-ui, sans-serif; }
+  header { background: var(--brand); color: #fff; padding: 16px; text-align: center; }
+  header h1 { margin: 0; font-size: 19px; }
+  main { max-width: 480px; margin: 0 auto; padding: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; margin-bottom: 14px; }
+  .big { font-size: 46px; font-weight: 800; text-align: center; letter-spacing: 1px; }
+  .plate { text-align: center; font-size: 19px; color: var(--muted); }
+  .status { text-align: center; font-size: 24px; font-weight: 700; margin: 14px 0 4px; }
+  .status.ready { color: var(--ok); }
+  .sub { text-align: center; color: var(--muted); }
+  .steps { display: flex; justify-content: space-between; margin: 18px 0 6px; position: relative; }
+  .steps::before { content: ""; position: absolute; top: 13px; left: 8%; right: 8%; height: 3px; background: var(--line); }
+  .step { position: relative; flex: 1; text-align: center; font-size: 12px; color: var(--muted); }
+  .dot { width: 28px; height: 28px; border-radius: 50%; background: var(--line); margin: 0 auto 4px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+  .step.on .dot { background: var(--brand); color: #fff; } .step.on { color: var(--ink); font-weight: 600; }
+  .step.now .dot { box-shadow: 0 0 0 5px #bae6fd; }
+  .ready-box { background: #dcfce7; border-color: #86efac; }
+  .ready-box .status { font-size: 28px; }
+  table { width: 100%; border-collapse: collapse; } td { padding: 7px 0; border-bottom: 1px solid var(--line); } td.r { text-align: right; }
+  .pts { font-size: 40px; font-weight: 800; text-align: center; color: var(--brand); }
+  .note { font-size: 13px; color: var(--muted); text-align: center; }
+  .warn { background: #fef3c7; border-radius: 10px; padding: 10px; font-size: 14px; margin-top: 12px; }
+</style>
+</head>
+<body translate="no">
+<header><h1 id="shop">Car Wash</h1></header>
+<main>
+  <div id="msg" class="card" hidden></div>
+
+  <div id="ticket" hidden>
+    <div class="card" id="tCard">
+      <div class="sub">บัตรคิว Your ticket</div>
+      <div class="big" id="tNo"></div>
+      <div class="plate" id="tPlate"></div>
+      <div class="status" id="tStatus"></div>
+      <div class="sub" id="tSub"></div>
+      <div class="steps" id="tSteps"></div>
+      <div class="warn" id="tStale" hidden>⚠️ ข้อมูลอาจไม่อัปเดต กรุณาสอบถามพนักงาน · The status may be out of date, please ask our staff.</div>
+    </div>
+    <div class="card"><div class="sub">บริการ Services</div><div id="tServices" style="text-align:center;margin-top:4px"></div></div>
+    <p class="note">หน้านี้อัปเดตอัตโนมัติ This page updates by itself · <span id="tUpdated"></span></p>
+  </div>
+
+  <div id="member" hidden>
+    <div class="card">
+      <div class="sub">สมาชิก Member</div>
+      <div class="big" style="font-size:30px" id="mName"></div>
+      <div class="plate" id="mTier"></div>
+      <div class="pts" id="mPoints"></div>
+      <div class="sub" id="mValue"></div>
+    </div>
+    <div class="card"><div class="sub" style="margin-bottom:6px">แพ็กเกจของคุณ Your packages</div><table id="mPkgs"></table></div>
+    <p class="note">แสดงหน้านี้หรือบัตรสมาชิกเมื่อมาใช้บริการ · Show this page or your card when you visit.</p>
+  </div>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const q = new URLSearchParams(location.search);
+  const id = q.get('s') || '', t = q.get('t') || '', m = q.get('m') || '';
+  const API = /^[\w-]{20,120}$/.test(id) ? `https://script.google.com/macros/s/${id}/exec` : '';
+  const time = (ms) => new Date(ms).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+  const show = (html) => { $('msg').innerHTML = html; $('msg').hidden = false; };
+  const STEPS = [['waiting', '⏳', 'รอคิว<br>Waiting'], ['washing', '🧽', 'กำลังล้าง<br>Washing'], ['ready', '✅', 'เสร็จแล้ว<br>Ready'], ['done', '🚗', 'รับรถแล้ว<br>Picked up']];
+  const ORDER = { waiting: 0, washing: 1, finishing: 1, ready: 2, done: 3 };
+  let wasReady = false, timer;
+
+  if (!API || (!t && !m)) return show('กรุณาสแกน QR code บนบัตรคิวหรือบัตรสมาชิก<br>Please scan the QR code on your ticket or member card.');
+
+  async function get(params) {
+    const r = await fetch(`${API}?${new URLSearchParams(params)}`);
+    return r.json();
+  }
+  function shop(s) { if (s && s.name) { $('shop').textContent = s.name; document.title = s.name; } }
+
+  async function loadTicket() {
+    try {
+      const j = await get({ action: 'ticket', t });
+      shop(j.shop);
+      if (!j.ok) { $('ticket').hidden = true; return show('ไม่พบบัตรคิวนี้ อาจรับรถไปแล้ว<br>Ticket not found. It may already be picked up.' + (j.shop && j.shop.phone ? `<br><br>📞 ${esc(j.shop.phone)}` : '')); }
+      $('msg').hidden = true; $('ticket').hidden = false;
+      const x = j.ticket, now = j.now || Date.now();
+      $('tNo').textContent = x.no; $('tPlate').textContent = x.plate; $('tServices').textContent = x.services;
+      const st = x.status;
+      const label = { waiting: 'รอคิว · Waiting', washing: 'กำลังล้าง · Washing', finishing: 'กำลังเก็บงาน · Finishing', ready: 'เสร็จแล้ว เชิญรับรถได้เลย!<br>Your car is ready!', done: 'รับรถแล้ว ขอบคุณค่ะ · Picked up, thank you!', cancelled: 'ยกเลิก · Cancelled' }[st] || st;
+      $('tStatus').innerHTML = label; $('tStatus').className = 'status' + (st === 'ready' ? ' ready' : '');
+      $('tCard').classList.toggle('ready-box', st === 'ready');
+      const mins = x.eta ? Math.max(1, Math.round((x.eta - now) / 60000)) : null;
+      $('tSub').innerHTML = st === 'waiting' ? `${x.ahead > 0 ? `มีรถก่อนหน้า ${x.ahead} คัน · ${x.ahead} car${x.ahead > 1 ? 's' : ''} ahead<br>` : 'คันถัดไป · You are next<br>'}${mins ? `เสร็จประมาณ ${time(x.eta)} (~${mins} นาที)` : ''}`
+        : (st === 'washing' || st === 'finishing') ? `ช่อง Bay ${esc(x.bay)}${mins ? ` · เสร็จประมาณ ${time(x.eta)} (~${mins} นาที)` : ''}` : '';
+      const cur = ORDER[st] ?? -1;
+      $('tSteps').innerHTML = STEPS.map(([k, ic, n], i) => `<div class="step ${i <= cur ? 'on' : ''} ${i === cur ? 'now' : ''}"><div class="dot">${ic}</div>${n}</div>`).join('');
+      $('tSteps').hidden = st === 'cancelled';
+      $('tStale').hidden = !(j.updated && now - j.updated > 6 * 60000 && ['waiting', 'washing', 'finishing'].includes(st));
+      $('tUpdated').textContent = j.updated ? `ร้านอัปเดตล่าสุด ${time(j.updated)}` : '';
+      if (st === 'ready' && !wasReady) { wasReady = true; try { navigator.vibrate && navigator.vibrate([300, 150, 300]); } catch (e) {} }
+      clearTimeout(timer);
+      if (st !== 'done' && st !== 'cancelled') timer = setTimeout(loadTicket, document.hidden ? 60000 : 15000);
+    } catch (e) {
+      show('เชื่อมต่อไม่ได้ กำลังลองใหม่… · Connection problem, retrying…');
+      clearTimeout(timer); timer = setTimeout(loadTicket, 20000);
+    }
+  }
+
+  async function loadMember() {
+    try {
+      const j = await get({ action: 'member', m });
+      shop(j.shop);
+      if (!j.ok) return show('ไม่พบข้อมูลสมาชิก กรุณาติดต่อร้าน<br>Member not found. Please ask our staff.');
+      const x = j.member;
+      $('member').hidden = false;
+      $('mName').textContent = `คุณ ${x.name}`;
+      $('mTier').textContent = `${x.id} · ${x.tier}`;
+      $('mPoints').textContent = `⭐ ${Number(x.points).toLocaleString()}`;
+      $('mValue').textContent = `แต้ม points${x.pointsValue ? ` · มูลค่า ฿${x.pointsValue.toLocaleString()}` : ''}`;
+      const rows = [...x.credits.map((c) => `<tr><td>🎟️ ${esc(c.name)}</td><td class="r"><b>เหลือ ${c.left}</b><br><small>ถึง ${esc(c.expires)}</small></td></tr>`),
+        ...x.plans.map((p) => `<tr><td>♾️ ${esc(p.name)}<br><small>${esc(p.plate)}</small></td><td class="r">ถึง <b>${esc(p.expires)}</b></td></tr>`)];
+      $('mPkgs').innerHTML = rows.join('') || '<tr><td class="note">ยังไม่มีแพ็กเกจ No packages yet. Ask our staff!</td></tr>';
+    } catch (e) { show('เชื่อมต่อไม่ได้ · Connection problem. Please try again.'); }
+  }
+
+  if (t) { loadTicket(); document.addEventListener('visibilitychange', () => { if (!document.hidden) loadTicket(); }); }
+  else loadMember();
+})();
+</script>
+</body>
+</html>
